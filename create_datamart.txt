@@ -1,0 +1,105 @@
+--1. Вставляем данные в таблицу shipping_country_rates
+INSERT INTO shipping_country_rates (
+	shipping_country,
+	shipping_country_base_rate     )
+SELECT DISTINCT 
+	shipping_country,
+	shipping_country_base_rate     
+FROM public.shipping; 
+	
+--2. Вставляем данные в таблицу shipping_country_rates
+INSERT INTO shipping_agreement (
+	agreementid ,
+	agreement_number,
+	agreement_rate,
+	agreement_commission       )
+SELECT DISTINCT
+	CAST((regexp_split_to_array(vendor_agreement_description, E'\\:+'))[1] AS BIGINT) agreementid, 
+	(regexp_split_to_array(vendor_agreement_description, E'\\:+'))[2] agreement_number,
+	CAST((regexp_split_to_array(vendor_agreement_description, E'\\:+'))[3] AS NUMERIC(3,2)) agreement_rate,
+	CAST((regexp_split_to_array(vendor_agreement_description, E'\\:+'))[4] AS NUMERIC(3,2)) agreement_commission
+FROM public.shipping; 
+
+--3. Вставляем данные в таблицу shipping_transfer
+INSERT INTO shipping_transfer (
+    transfer_type,
+	transfer_model,  
+	shipping_transfer_rate    )
+SELECT DISTINCT 
+	(regexp_split_to_array(shipping_transfer_description, E'\\:+'))[1] transfer_type,
+	(regexp_split_to_array(shipping_transfer_description, E'\\:+'))[2] transfer_model,
+	shipping_transfer_rate
+FROM public.shipping; 
+	
+--4. Вставляем данные в таблицу shipping_info
+INSERT INTO shipping_info (
+	 shippingid,
+	 shipping_country_id,
+	 agreementid,
+	 transfer_type_id,
+	 shipping_plan_datetime,
+	 payment_amount,
+	 vendorid             )
+SELECT 
+	 shippingid,
+     s_c_r.id,
+	 CAST((regexp_split_to_array(vendor_agreement_description, E'\\:+'))[1] AS BIGINT) agreementid,
+	 s_tran.transfer_type_id,
+	 shipping_plan_datetime,
+	 payment_amount,
+	 vendorid 
+FROM public.shipping ship
+LEFT JOIN shipping_country_rates s_c_r
+	ON s_c_r.shipping_country = ship.shipping_country
+LEFT JOIN shipping_transfer s_tran
+	ON s_tran.transfer_type = (regexp_split_to_array(ship.shipping_transfer_description, E'\\:+'))[1]
+	AND s_tran.transfer_model = (regexp_split_to_array(ship.shipping_transfer_description, E'\\:+'))[2];
+
+--5. Вставляем данные в таблицу shipping_status
+INSERT INTO shipping_status         (
+	 shippingid,	
+	 status,
+	 state,
+	 shipping_start_fact_datetime,
+	 shipping_end_fact_datetime     )
+
+WITH st AS (
+	SELECT 
+		shippingid,
+		state, 
+		status,
+		ROW_NUMBER() OVER(PARTITION BY shippingid ORDER BY state_datetime DESC) rn
+	FROM public.shipping ship
+           ),
+start_b AS (
+	SELECT 
+		shippingid,
+		MIN(state_datetime) shipping_start_fact_datetime
+	FROM public.shipping ship
+	WHERE state = 'booked'
+	GROUP BY shippingid
+           ),         
+end_r AS (
+	SELECT 
+		shippingid,
+		MIN(state_datetime) shipping_end_fact_datetime
+	FROM public.shipping ship
+	WHERE state = 'recieved'
+	GROUP BY shippingid
+           ) 	 
+SELECT            
+	start_b.shippingid,           
+	st.state, 
+	st.status,    
+	start_b.shipping_start_fact_datetime,
+	end_r.shipping_end_fact_datetime
+FROM start_b 
+JOIN end_r
+	ON end_r.shippingid = start_b.shippingid
+JOIN st 
+	ON st.shippingid = start_b.shippingid
+WHERE rn = 1;	
+           
+
+
+
